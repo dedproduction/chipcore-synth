@@ -1,0 +1,83 @@
+name: Build CHIPCORE
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APP_VERSION: 1.0.0
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache JUCE download
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/juce-src
+          key: juce-8.0.10-${{ runner.os }}
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -Recurse "build/CHIPCORE_artefacts/Release/VST3/CHIPCORE.vst3" dist/
+          Copy-Item "build/CHIPCORE_artefacts/Release/Standalone/CHIPCORE.exe" dist/
+          Copy-Item README.md dist/
+          Copy-Item Resources/OFL.txt dist/FONT-LICENSE.txt
+          Compress-Archive -Path dist/* -DestinationPath CHIPCORE-Windows-x64.zip
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DSourceDir=$pwd\dist" "/DAppVersion=$env:APP_VERSION" installer\chipcore.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "installer-out/CHIPCORE-Setup-$env:APP_VERSION.exe" "CHIPCORE-Setup.exe"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHIPCORE-Windows-x64
+          path: |
+            dist/
+            CHIPCORE-Setup.exe
+
+      # Every push to main refreshes the "latest" download on the Releases page
+      - name: Publish latest build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: CHIPCORE (latest build)
+          prerelease: true
+          body: |
+            Fresh build from ${{ github.sha }}.
+            Easiest: download and run CHIPCORE-Setup.exe - it installs the VST3 for you.
+            Manual: unzip CHIPCORE-Windows-x64.zip and copy CHIPCORE.vst3 to C:\Program Files\Common Files\VST3
+          files: |
+            CHIPCORE-Setup.exe
+            CHIPCORE-Windows-x64.zip
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            CHIPCORE-Setup.exe
+            CHIPCORE-Windows-x64.zip
